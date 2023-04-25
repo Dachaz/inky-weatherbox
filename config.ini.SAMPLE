@@ -1,0 +1,25 @@
+[DEFAULT]
+# Identifies your app in NewRelic
+AppName = inky-weatherbox
+LogFile = /var/log/inky-weatherbox.log
+
+[Weather]
+# Show weather for this location
+Lattitude = 52.37
+Longitude = 4.89
+# Valid values: C, F
+TempUnit = C
+# Valid values: kmh, mph, ms, kn
+WindUnit = kmh
+
+[Schedule]
+# Don't wake up and update the display between these hours (in UTC)
+QuietTimeFrom = 23
+QuietTimeTo = 7
+
+[NewRelic]
+ApiKey     = REPLACE_WITH_YOUR_OWN_KEY
+# Leave if your data is in EU, for US use: https://metric-api.newrelic.com/metric/v1
+MetricsUrl = https://metric-api.eu.newrelic.com/metric/v1
+# Leave if your data is in EU, for US use: https://log-api.newrelic.com/log/v1
+LogsUrl    = https://log-api.eu.newrelic.com/log/v1

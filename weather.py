@@ -1,249 +1,300 @@
-from inky import InkyPHAT
+#!/usr/bin/python3
+
 import json
 import requests
-
-inky_display = InkyPHAT("red")
-inky_display.set_border(inky_display.WHITE)
-
+import datetime
 from PIL import Image, ImageFont, ImageDraw
-
-img = Image.new("P", (inky_display.WIDTH, inky_display.HEIGHT))
-draw = ImageDraw.Draw(img)
-
-#fonts
 from font_fredoka_one import FredokaOne
-font = ImageFont.truetype(FredokaOne, 22)
-font2 = ImageFont.truetype(FredokaOne, 14)
-fontBIG = ImageFont.truetype(FredokaOne, 34)
-fontSML = ImageFont.truetype(FredokaOne, 10)
 
-APIKEY = #insert API key from https://www.wunderground.com/member/api-keys after registering an account
-STATION = #insert station ID from https://www.wunderground.com/
-ZIPCODE = #insert Zip Code  
+# Gives baufort scale value for speed in kmh
+def to_baufort(windspeed):
+    scale = [1, 6, 12, 20, 29, 39, 50, 62, 75, 89, 103, 118]
+    i = 0
+    while i < len(scale) and windspeed > scale[i]:
+        i += 1
+    return i
 
-#get current conditions from weather underground
-query = "https://api.weather.com/v2/pws/observations/current?stationId="+STATION+"&format=json&units=e&apiKey="+APIKEY
-url = requests.get(query)
-text = url.text
-x = json.loads(text)
+def fetch_data(lattitude=52.37, longitude=4.89, temperature_unit="celsius", windspeed_unit="kmh"):
+    # Minimum input cleaning
+    temperature_unit = "fahrenheit" if temperature_unit == "F" else "celsius"
 
-#get 5-day json from weather underground
-wquery = "https://api.weather.com/v3/wx/forecast/daily/5day?postalKey="+ZIPCODE+":US&units=e&language=en-US&format=json&apiKey="+APIKEY
-wurl = requests.get(wquery)
-wtext = wurl.text
-y = json.loads(wtext)
+    # Not using match as default python in RaspberryOS is outdated
+    if windspeed_unit == "mph":
+        wind_scale = 1.61
+    elif windspeed_unit == "ms":
+        wind_scale = 3.6
+    elif windspeed_unit == "kn":
+        wind_scale = 1.852
+    else:
+        windspeed_unit = "kmh"
+        wind_scale = 1
 
-#get variables from jsons
-#print(x['observations'][0]['imperial']['temp'])
-currentTemp = x['observations'][0]['imperial']['temp']
-currentDate = x['observations'][0]['obsTimeLocal'].split(' ')[0].split('-',1)[1]
-currentTime = x['observations'][0]['obsTimeLocal'].split(' ')[1]
-calendarDayTemperatureMax = y['calendarDayTemperatureMax']
-calendarDayTemperatureMin = y['calendarDayTemperatureMin']
-tomorrowMax = y['calendarDayTemperatureMax'][1]
-tomorrowMin = y['calendarDayTemperatureMin'][1]
-narrative = y['narrative'][0]
-narrative = narrative.replace('the ','').split(". ")
-dayOfWeek = y['dayOfWeek'][1]
+    url = "https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s&hourly=precipitation&daily=temperature_2m_max,temperature_2m_min,sunrise,sunset,windspeed_10m_max&current_weather=true&timezone=%s&temperature_unit=%s&windspeed_unit=%s" % (lattitude, longitude, 'auto', temperature_unit, windspeed_unit)
+    response = requests.get(url)
+    raw_data = json.loads(response.text)
 
-# get icon
-icon = y['daypart'][0]['iconCode'][0]
-if icon is None: #in the evenings the first response in the array is null 
-	icon = y['daypart'][0]['iconCode'][1]
-#icon = 41
+    TEMPUNIT = raw_data['daily_units']['temperature_2m_max']
+    WINDUNIT = raw_data['daily_units']['windspeed_10m_max']
+    windspeed = raw_data['current_weather']["windspeed"]
 
-#make message
-nowTemp = str(currentTemp) + " " + u"\N{DEGREE SIGN}" + "F"
-rangeMessage = str(calendarDayTemperatureMin[0]) + "-" + str(calendarDayTemperatureMax[0]) +" "+ u"\N{DEGREE SIGN}"  +"F"
-futureMessage = str(tomorrowMin) + "-" + str(tomorrowMax) + " " + u"\N{DEGREE SIGN}"  + "F"
+    data = {
+        'baufort': to_baufort(windspeed * wind_scale),
+        'icon': raw_data['current_weather']['weathercode'],
+        'precipitation': raw_data['hourly']['precipitation'],
+        'range': str(round(raw_data['daily']['temperature_2m_min'][0])) + "—" + str(round(raw_data['daily']['temperature_2m_max'][0])) + TEMPUNIT,
+        'sunrise': raw_data['daily']['sunrise'][0],
+        'sunset': raw_data['daily']['sunset'][0],
+        'temp': str(round(raw_data['current_weather']["temperature"])) + TEMPUNIT,
+        'wind': str(round(windspeed)) + WINDUNIT,
+        'wind_direction': raw_data['current_weather']["wind_direction"],
 
-#draw the standard stuff
-draw.rectangle((0,0,212,104),inky_display.BLACK)
+        'TEMPUNIT': TEMPUNIT,
+        'WINDUNIT': WINDUNIT,
+    }
 
-draw.line((0,0,115,115),inky_display.RED, width=30) 
-draw.text((5, 5), nowTemp, inky_display.WHITE, font)
-draw.text((5, 30), "Today: "+rangeMessage, inky_display.WHITE, font2)
-draw.text((5, 46), dayOfWeek +": " + futureMessage, inky_display.WHITE, font2)
-#draw.text((5, 75), narrative[0], inky_display.WHITE, font2)
-# Start Variable Font Size for Narrative
-y_top = 60		# Top of the narrative area
-y_bottom = 100		# Bottom of the narrative area
-fontSize = 9  		# Starting Font Size
-fontMaxSize = 30	# Maximum font size
+    return data
 
-fontNAR = ImageFont.truetype(FredokaOne,fontSize)
-while (fontNAR.getsize(narrative[0])[0] <= int(inky_display.width * .95)) and (fontSize < fontMaxSize):
-	# iterate until the text size is just larger than the criteria
-	fontSize += 1
-	fontNAR = ImageFont.truetype(FredokaOne, fontSize)
-fontSize -= 1
-fontNAR = ImageFont.truetype(FredokaOne,fontSize)
-narrative_w, narrative_h = fontNAR.getsize(narrative[0])
-narrative_x = int((inky_display.width - narrative_w) / 2)
-narrative_y = int(y_top + ((y_bottom - y_top - narrative_h) / 2))
-draw.text((narrative_x, narrative_y), narrative[0], inky_display.WHITE, fontNAR)
-# End Variable Font Size for Narrative
+def draw_image(display, data):
+    img = Image.new("P", (display.WIDTH, display.HEIGHT))
+    draw = ImageDraw.Draw(img)
 
-#date and time
-w, h = fontSML.getsize(currentDate + " " + currentTime[0:5])
-x = (inky_display.WIDTH / 2) - (w / 2)
-draw.text((x,5), (currentDate + " " + currentTime[0:5]), inky_display.WHITE, fontSML)
+    # fonts
+    fonts = {
+        'S': ImageFont.truetype(FredokaOne, int(0.11 * display.HEIGHT)),
+        'M': ImageFont.truetype(FredokaOne, int(0.13 * display.HEIGHT)),
+        'L': ImageFont.truetype(FredokaOne, int(0.27 * display.HEIGHT))
+    }
 
-# Make your own icons to align with weather undergrounds icon set: https://ibm.co/TWCICv2
+    # clear the display
+    draw.rectangle((0, 0, display.WIDTH, display.HEIGHT), display.BLACK)
 
-# big moon
-if (icon ==  27) or (icon == 29) or (icon == 31) or (icon == 33):
-	sx = 135
-	sy = 10
+    # Draw precipitation as a background polygon
+    hour = datetime.datetime.now().hour
+    line_width = int(display.WIDTH/6)
+    line = []
 
-	draw.ellipse((sx, sy, sx+50, sy+50), inky_display.WHITE)
-	if (icon is 31) or (icon is 33): 
-		draw.ellipse((sx+10, sy-10, sx+60, sy+40), inky_display.BLACK) 
+    for i in range(0, 7):
+        prec = data['precipitation'][hour+i]
+        line.append(i * line_width)
+        line.append(display.HEIGHT - (prec / 5 * display.HEIGHT))
 
-# small sun
-if (icon == 28) or (icon == 30) or (icon == 38) or (icon == 41):
-	sx = 135
-	sy = 25
-	draw.ellipse((sx, sy, sx+10, sy+10), inky_display.WHITE)
-	draw.polygon((sx+1, sy, sx-10, sy+5, sx+10, sy+9), inky_display.WHITE)
-	draw.polygon((sx+5, sy-10, sx, sy, sx+10, sy), inky_display.WHITE)
-	draw.polygon((sx+10, sy, sx+20, sy+5, sx+10, sy+10), inky_display.WHITE)
-	draw.line((sx-5, sy-5, sx+15, sy+15), inky_display.WHITE, 5)
-	draw.line((sx-5, sy+15, sx+15, sy-5), inky_display.WHITE, 5)
+    line.extend([display.WIDTH, display.HEIGHT, 0, display.HEIGHT])
 
-# big sun!
-if (icon == 32) or (icon == 34) or (icon == 36):
-	sx = 155
-	sy = 25
+    draw.polygon(line, display.RED)
 
-	# rays                
-	draw.polygon((sx+12, sy-16, sx+17, sy,    sx+7 , sy,    sx+12, sy-16), inky_display.WHITE, 5) #top 
-	draw.polygon((sx+12, sy+40, sx+17, sy+30, sx+7 , sy+30, sx+12, sy+40), inky_display.WHITE, 5) #down
-	draw.polygon((sx-17, sy+12, sx   , sy+7 , sx   , sy+17, sx-16, sy+12), inky_display.WHITE, 5) #left
-	draw.polygon((sx+40, sy+12, sx+24, sy+7 , sx+24, sy+17, sx+40, sy+12), inky_display.WHITE, 5) #right
+    # Draw the temperature
+    sx = 0.05 * display.WIDTH
+    sy = 0.25 * display.HEIGHT
+    draw.text((sx,   sy),    data['temp'],  display.WHITE, fonts['L'])
+    draw.text((sx+1, sy+36), data['range'], display.BLACK, fonts['S']) # shadow
+    draw.text((sx,   sy+35), data['range'], display.RED,   fonts['S'])
 
-	draw.line((sx-10, sy-10, sx+34, sy+34), inky_display.WHITE, 5)
-	draw.line((sx-10, sy+34, sx+34, sy-10), inky_display.WHITE, 5)
+    # Draw the wind
+    sx = 0.45 * display.WIDTH
+    sy = 0.34 * display.HEIGHT
+    # draw.arc starts at 3 o'clock, while wind direction starts at 12 o'clock — hence, shifting by 90º
+    draw.arc((sx-4, sy-4, sx+24, sy+24), data['wind_direction']-60+90, data['wind_direction']+90, fill=display.WHITE, width=3)
 
-	# sun
-	draw.ellipse((sx-5, sy-5, sx+29, sy+29), inky_display.BLACK)
-	draw.ellipse((sx  , sy  , sx+24, sy+24), inky_display.WHITE)
+    if (data['baufort'] < 10):
+        draw.text((sx+5, sy),   str(data['baufort']), display.WHITE, fonts['M'])
+    else:
+        draw.text((sx+3, sy+2), str(data['baufort']), display.WHITE, fonts['S'])
 
-# secondary "heavy" cloud
-if (icon == 27) or (icon == 28) or (icon == 38):
-	sx = 170	
-	sy = 25
+    draw.text((sx-9,  sy+26), data['wind'], display.BLACK, fonts['S']) # shadow
+    draw.text((sx-10, sy+25), data['wind'], display.RED,   fonts['S'])
 
-	#black
-	draw.ellipse((sx-5, sy-5, sx+20, sy+20), inky_display.BLACK)
-	draw.ellipse((sx+5, sy, sx+30, sy+20), inky_display.BLACK)
+    # Icons aligned with WMO Weather interpretation codes (https://open-meteo.com/en/docs#weathervariables)
 
-	#white
-	draw.ellipse((sx, sy, sx+15, sy+15), inky_display.WHITE)
-	draw.ellipse((sx+10, sy+5, sx+25, sy+15), inky_display.WHITE)
+    # clear and partly cloudy
+    icon = data['icon']
+    if icon < 3:
+        # big moon
+        if datetime.datetime.now() > datetime.datetime.fromisoformat(data['sunset']) or datetime.datetime.now() < datetime.datetime.fromisoformat(data['sunrise']):
+            sx = 0.70 * display.WIDTH
+            sy = 0.24 * display.HEIGHT
+            # moon
+            draw.ellipse((sx,    sy,    sx+50, sy+50), display.WHITE)
+            draw.ellipse((sx+10, sy-10, sx+60, sy+40), display.BLACK)
 
-# small cloud
-if (icon == 33) or (icon == 34):
-	sx = 145
-	sy = 35
+            # clear skies = stars
+            if icon == 0:
+                draw.line((sx+20, sy,   sx+30, sy), display.WHITE, 2)
+                draw.line((sx+25, sy-5, sx+25, sy+5), display.WHITE, 2)
+        # big sun
+        else:
+            sx = 0.73 * display.WIDTH
+            sy = 0.33 * display.HEIGHT
+            # rays
+            draw.polygon((sx+12, sy-16, sx+17, sy,    sx+7, sy,    sx+12, sy-16), display.WHITE, 4) # top
+            draw.polygon((sx+12, sy+40, sx+17, sy+30, sx+7, sy+30, sx+12, sy+40), display.WHITE, 4) # down
+            draw.polygon((sx-17, sy+12, sx,    sy+7,  sx,   sy+17, sx-16, sy+12), display.WHITE, 4) # left
+            draw.polygon((sx+40, sy+12, sx+24, sy+7, sx+24, sy+17, sx+40, sy+12), display.WHITE, 4) # right
 
-	#outline
-	draw.ellipse((sx-3, sy-3, sx+8, sy+8), inky_display.BLACK)
-	draw.ellipse((sx+2, sy-8, sx+18, sy+8), inky_display.BLACK)
-	draw.ellipse((sx+7, sy-13,sx+28, sy+8), inky_display.BLACK)
-	draw.ellipse((sx+17, sy-8, sx+33, sy+8), inky_display.BLACK)
+            draw.line((sx-5, sy-5,  sx+29, sy+29), display.WHITE, 4)
+            draw.line((sx-5, sy+29, sx+29, sy-5), display.WHITE, 4)
 
-	#white
-	draw.ellipse((sx, sy, sx+5, sy+5), inky_display.WHITE)
-	draw.ellipse((sx+5, sy-5, sx+15, sy+5), inky_display.WHITE)
-	draw.ellipse((sx+10, sy-10, sx+25, sy+5), inky_display.WHITE)
-	draw.ellipse((sx+20, sy-5, sx+30, sy+5), inky_display.WHITE)
+            # sun
+            draw.ellipse((sx-5, sy-5, sx+29, sy+29), display.BLACK)
+            draw.ellipse((sx,   sy,   sx+24, sy+24), display.WHITE)
 
-# stars = clear night
-if (icon == 31):
-	sx = 160
-	sy = 30
-	draw.line((sx, sy, sx+10, sy), inky_display.WHITE, 2)
+        # secondary "heavy" cloud
+        if (icon == 2):
+            sx = 0.85 * display.WIDTH
+            sy = 0.34 * display.HEIGHT
 
-	sx = 165
-	sy = 25
-	draw.line((sx, sy, sx, sy+10), inky_display.WHITE, 2)
+            # black
+            draw.ellipse((sx-5, sy-5, sx+20, sy+20), display.BLACK)
+            draw.ellipse((sx+5, sy,   sx+30, sy+20), display.BLACK)
 
-# if icon has a big cloud
-if (icon >= 3 and icon <=14) or (icon >= 16 and icon <= 22) or (icon >= 26 and icon <= 30) or (icon == 35) or (icon >= 38 and icon <= 43) or (icon >= 45):
-	sx = 140
-	sy = 40
+            # white
+            draw.ellipse((sx,    sy,   sx+15, sy+15), display.WHITE)
+            draw.ellipse((sx+10, sy+5, sx+25, sy+15), display.WHITE)
 
-	#dark
-	draw.ellipse((sx-5, sy-5, sx+15, sy+15),inky_display.BLACK) 
-	draw.ellipse((sx, sy-15, sx+30, sy+15),inky_display.BLACK)
-	draw.ellipse((sx+10, sy-25, sx+50, sy+15), inky_display.BLACK)
-	draw.ellipse((sx+30, sy-15, sx+60, sy+15), inky_display.BLACK)
+        # small cloud
+        if (icon == 1) or (icon == 2):
+            sx = 0.80 * display.WIDTH
+            sy = 0.34 * display.HEIGHT
 
-	#white
-	draw.ellipse((sx, sy, sx+10, sy+10), inky_display.WHITE)
-	draw.ellipse((sx+5, sy-10, sx+25, sy+10), inky_display.WHITE)
-	draw.ellipse((sx+15, sy-20, sx+45, sy+10), inky_display.WHITE)
-	draw.ellipse((sx+35, sy-10, sx+55, sy+10), inky_display.WHITE)
+            # outline
+            draw.ellipse((sx-3,  sy-3,  sx+8,  sy+8), display.BLACK)
+            draw.ellipse((sx+2,  sy-8,  sx+18, sy+8), display.BLACK)
+            draw.ellipse((sx+7,  sy-13, sx+28, sy+8), display.BLACK)
+            draw.ellipse((sx+17, sy-8,  sx+33, sy+8), display.BLACK)
 
-# heavy rain drop
-if (icon >= 3 and icon <12):
-	sx = 175
-	sy = 60
-	draw.ellipse((sx, sy, sx+5,sy+5),inky_display.WHITE)
-	draw.polygon((sx-5, sy-5, sx, sy+3, sx+5, sy+1, sx-5, sy-5), inky_display.WHITE)
- 
-# left rain drop
-if (icon == 9) or  (icon == 11) or (icon == 12) or (icon == 39) or (icon == 40):
-	sx = 160
-	sy = 60
-	draw.ellipse((sx+3, sy-3, sx+7, sy), inky_display.WHITE)
-	draw.polygon((sx, sy-6, sx+5, sy-1, sx+6, sy-4, sx+2, sy-6), inky_display.WHITE) 
+            # white
+            draw.ellipse((sx,    sy,    sx+5,  sy+5), display.WHITE)
+            draw.ellipse((sx+5,  sy-5,  sx+15, sy+5), display.WHITE)
+            draw.ellipse((sx+10, sy-10, sx+25, sy+5), display.WHITE)
+            draw.ellipse((sx+20, sy-5,  sx+30, sy+5), display.WHITE)
 
-# right rain drop
-if (icon == 9) or (icon == 11) or (icon == 12) or (icon == 39) or (icon == 40) or (icon == 45):
-	sx = 180
-	sy = 60
-	draw.ellipse((sx+3, sy-4, sx+7, sy-1), inky_display.WHITE)
-	draw.polygon((sx, sy-6, sx+5, sy-1, sx+6, sy-4, sx+2, sy-6), inky_display.WHITE)
+    # If icon has a big cloud
+    else:
+        sx = 0.70 * display.WIDTH
+        sy = 0.45 * display.HEIGHT
 
-# right lightning bolt 
-if (icon == 3) or (icon == 4):
-	sx = 180
-	sy = 47
-	draw.polygon(((sx+2, sy+6), (sx+10, sy+6), (sx+14, sy+12), (sx+8, sy+12), (sx+10, sy+18), (sx+2, sy+10), (sx+7, sy+10), (sx+2, sy+6)), inky_display.WHITE)
+        # dark
+        draw.ellipse((sx-5,  sy-5,  sx+15, sy+15), display.BLACK)
+        draw.ellipse((sx,    sy-15, sx+30, sy+15), display.BLACK)
+        draw.ellipse((sx+10, sy-25, sx+50, sy+15), display.BLACK)
+        draw.ellipse((sx+30, sy-15, sx+60, sy+15), display.BLACK)
 
-# wind
-if (icon >= 23) and (icon <= 25):
-	#left cloud
-	draw.ellipse((165, 10, 185, 30), inky_display.WHITE) #puff of wind
-	draw.line((140, 30, 175, 30), inky_display.WHITE, 5) #line
-	draw.ellipse((170, 15, 180, 25), inky_display.BLACK) #negative space ball
-	draw.line((140, 25, 175, 25), inky_display.BLACK, 5) #negative space line
+        # white
+        draw.ellipse((sx,    sy,    sx+10, sy+10), display.WHITE)
+        draw.ellipse((sx+5,  sy-10, sx+25, sy+10), display.WHITE)
+        draw.ellipse((sx+15, sy-20, sx+45, sy+10), display.WHITE)
+        draw.ellipse((sx+35, sy-10, sx+55, sy+10), display.WHITE)
 
-	draw.ellipse((175, 35, 195, 55), inky_display.WHITE)
-	draw.line((150, 40, 185, 40), inky_display.WHITE, 5)
-	draw.ellipse((180, 40, 190, 50), inky_display.BLACK)
-	draw.line((150, 45, 185, 45), inky_display.BLACK, 5) 
+        # foggy
+        if icon in [45, 48]:
+            sx = 0.74 * display.WIDTH
+            sy = 0.60 * display.HEIGHT
 
-# big snow below
-if (icon == 13):
-	draw.text((160, 45), "*", inky_display.WHITE, fontBIG)
+            draw.line((sx,    sy,   sx+40, sy),   display.WHITE, 3)
+            draw.line((sx+4,  sy+4, sx+12, sy+4), display.WHITE, 3)
+            draw.line((sx+17, sy+4, sx+45, sy+4), display.WHITE, 3)
+            draw.line((sx,    sy+8, sx+40, sy+8), display.WHITE, 3)
 
-# smaller snow
-if (icon >= 41) and (icon <= 43):
-	draw.text((157, 50), "*", inky_display.WHITE, font2)
-	draw.text((175, 53), "*", inky_display.WHITE, font2)
-	draw.text((164, 56), "*", inky_display.WHITE, font)
+        # snow
+        if icon in [71, 73, 75, 77, 85, 86]:
+            sx = 0.76 * display.WIDTH
+            sy = 0.60 * display.HEIGHT
 
-# foggy
-if (icon >= 19) and (icon <= 22) :
-	draw.line((150, 57, 190, 57), inky_display.WHITE, 3)
-	draw.line((154, 61, 162, 61), inky_display.WHITE, 3)
-	draw.line((167, 61, 195, 61), inky_display.WHITE, 3)
-	draw.line((150, 65, 190, 65), inky_display.WHITE, 3)
+            symbol = "*" if icon != 77 else "·"
 
-inky_display.set_image(img)
-inky_display.show()
+            draw.text((sx,    sy),   symbol, display.WHITE, fonts['S'])
+            draw.text((sx+18, sy+3), symbol, display.WHITE, fonts['S'])
+            draw.text((sx+7,  sy+6), symbol, display.WHITE, fonts['M'])
 
+        # heavy rain drop
+        if icon in [55, 57, 65, 67, 81, 82, 95, 96, 99]:
+            sx = 0.83 * display.WIDTH
+            sy = 0.67 * display.HEIGHT
+            draw.ellipse((sx, sy, sx+5, sy+5), display.WHITE)
+            draw.polygon((sx-5, sy-5, sx, sy+3, sx+5, sy+1, sx-5, sy-5), display.WHITE)
 
+        # left rain drop
+        if icon in [51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99]:
+            sx = 0.76 * display.WIDTH
+            sy = 0.67 * display.HEIGHT
+            draw.ellipse((sx+3, sy-3, sx+7, sy), display.WHITE)
+            draw.polygon((sx, sy-6, sx+5, sy-1, sx+6, sy-4, sx+2, sy-6), display.WHITE)
+
+        # right rain drop
+        if icon in [53, 55, 63, 65, 81, 82, 95, 96, 99]:
+            sx = 0.86 * display.WIDTH
+            sy = 0.67 * display.HEIGHT
+            draw.ellipse((sx+3, sy-4, sx+7, sy-1), display.WHITE)
+            draw.polygon((sx, sy-6, sx+5, sy-1, sx+6, sy-4, sx+2, sy-6), display.WHITE)
+
+        # right lightning bolt
+        if icon in [95, 96, 99]:
+            sx = 0.85 * display.WIDTH
+            sy = 0.55 * display.HEIGHT
+            draw.polygon(((sx+2, sy+6), (sx+10, sy+6), (sx+14, sy+12), (sx+8, sy+12),
+                         (sx+10, sy+18), (sx+2, sy+10), (sx+7, sy+10), (sx+2, sy+6)), display.WHITE)
+
+        # freezing drizzle/rain
+        if icon in [56, 57, 66, 67]:
+            sx = 0.87 * display.WIDTH
+            sy = 0.58 * display.HEIGHT
+            draw.text((sx, sy), "*", display.WHITE, fonts['S'])
+
+    return img
+
+def get_display(mock):
+    if mock:
+        from MockDisplay import MockDisplay
+        display = MockDisplay(mock)
+    else:
+        from inky.auto import auto
+        display = auto()
+        display.set_border(display.BLACK)
+
+    return display
+
+def main(lattitude, longitude, temperature_unit, windspeed_unit, mock=False):
+    data = fetch_data(lattitude, longitude, temperature_unit, windspeed_unit)
+    display = get_display(mock)
+    img = draw_image(display, data)
+    display.set_image(img)
+    display.show()
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(
+        description='Gets and draws weather conditions on your InkyPHAT'
+    )
+
+    parser.add_argument('-lat', '--lattitude',
+                        action='store',
+                        dest='lattitude',
+                        default=52.37,
+                        help='Get weather for this lattitude (default: 52.37)')
+
+    parser.add_argument('-lon', '--longitude',
+                        action='store',
+                        dest='longitude',
+                        default=4.89,
+                        help='Get weather for this lattitude (default: 4.89)')
+
+    parser.add_argument('-t', '--temp',
+                        action='store',
+                        dest='temperature_unit',
+                        default='celsius',
+                        help='Temperature unit. "C" (default) or "F"')
+
+    parser.add_argument('-w', '--wind',
+                        action='store',
+                        dest='windspeed_unit',
+                        default='kmh',
+                        help='Windspeed unit. One of: "kmh" (default), "mph", "ms" or "kn" ')
+
+    parser.add_argument('-m', '--mock',
+                        action='store',
+                        default=False,
+                        dest='mock',
+                        help='''Create inky.png instead of updating the display.
+                                Accepted values are "v1" (212x104 model) or "v2" (250x122 model)''')
+
+    args = parser.parse_args()
+    main(**vars(args))
